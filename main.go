@@ -7,22 +7,14 @@ import (
 	"net/http"
 )
 
-type ResultRow struct {
-	CorrectiveAbility string
-	Count             uint64
-	ClassSize         int
-}
-
-var DEBUG bool = true
-
 const n = 15
 const k = 11
-const informationVector = 83        // 000.0101.0011b
-const codedInformationVector = 1335 // 000.0101.0011.0111b
-const genPolynomial = 19            // 10011b
-var result = make([]ResultRow, n+1)
+const informationVector = 83         // 000.0101.0011b
+const codedInformationVector = 1335  // 000.0101.0011.0111b
+const genPolynomial = 19             // 10011b
+var result = make(map[int]string, n + 1)
 var errorClasses = getErrorsByClasses(n)
-var syndromeTable = getSyndromeTable(errorClasses[1], genPolynomial)
+var symptomTablesByClasses = getSymptomTablesByClasses(errorClasses, genPolynomial)
 
 func powBinary(n uint64) uint64 {
 	res := uint64(1)
@@ -34,7 +26,7 @@ func powBinary(n uint64) uint64 {
 
 func getBinaryLength(digit uint64) uint64 {
 	bitsNum := uint64(0)
-	for ; digit/2 != 0; digit /= 2 {
+	for ; digit / 2 != 0; digit /= 2 {
 		bitsNum++
 	}
 	bitsNum++
@@ -44,13 +36,13 @@ func getBinaryLength(digit uint64) uint64 {
 func IntToBytes(digit uint64) []byte {
 	var res []byte
 	for i := powBinary(getBinaryLength(digit) - 1); i > 0; i /= 2 {
-		res = append(res, byte(digit/i))
+		res = append(res, byte(digit / i))
 		digit %= i
 	}
 	return res
 }
 
-func factorial(n uint64) (result uint64) {
+func factorial(n uint64)(result uint64) {
 	if n > 0 {
 		result = n * factorial(n-1)
 		return result
@@ -63,9 +55,9 @@ func ImposeError(a, e uint64) uint64 {
 	eBytes := IntToBytes(e)
 
 	if len(aBytes) > len(eBytes) {
-		eBytes = append(make([]byte, len(aBytes)-len(eBytes)), eBytes...)
+		eBytes = append(make([]byte, len(aBytes) - len(eBytes)), eBytes...)
 	} else {
-		aBytes = append(make([]byte, len(eBytes)-len(aBytes)), aBytes...)
+		aBytes = append(make([]byte, len(eBytes) - len(aBytes)), aBytes...)
 	}
 
 	for pos, eByte := range eBytes {
@@ -102,7 +94,7 @@ func OperationO(a, b uint64) (uint64, uint64) {
 	}
 
 	for ; aBytesPos <= uint64(len(aBytes)); aBytesPos++ {
-		firstBitInCur := cur / powBinary(bLen-1)
+		firstBitInCur := cur / powBinary(bLen - 1)
 		integer <<= 1
 		integer += firstBitInCur
 
@@ -121,7 +113,7 @@ func OperationO(a, b uint64) (uint64, uint64) {
 }
 
 func getErrorsByClasses(n uint64) [][]uint64 {
-	errorClasses := make([][]uint64, n+1)
+	errorClasses := make([][]uint64, n + 1)
 	for i := uint64(1); i <= n; i++ {
 		size := factorial(n) / factorial(n-i) / factorial(i)
 		errorClasses[i] = make([]uint64, 0, size)
@@ -131,15 +123,15 @@ func getErrorsByClasses(n uint64) [][]uint64 {
 		class := bits.OnesCount64(i)
 		errorClasses[class] = append(errorClasses[class], i)
 	}
-	return errorClasses
+	return  errorClasses
 }
 
 func getErrorsByClassesString(errorClasses [][]uint64) [][]string {
 	errorsView := make([][]string, len(errorClasses))
 	for class, errorClass := range errorClasses {
 		errorsView[class] = make([]string, len(errorClass))
-		for i, err := range errorClass {
-			errorsView[class][i] = fmt.Sprintf("%b", err)
+		for i, err := range errorClass{
+			errorsView[class][i] = fmt.Sprintf("%b",err)
 		}
 	}
 	return errorsView
@@ -152,43 +144,54 @@ func ErrorPage(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, errorsView)
 }
 
-func getSyndromeTable(errorVectors []uint64, genPolynomial uint64) map[uint64]uint64 {
-	errorMap := make(map[uint64]uint64, len(errorVectors))
-	for _, err := range errorVectors {
-		_, syndrome := OperationO(err, genPolynomial)
-		errorMap[syndrome] = err
+func getSymptomTableForErrorList(errorVectors []uint64, genPolynomial uint64) map[uint64] uint64 {
+	errorMap := make(map[uint64] uint64, len(errorVectors))
+	for _, err := range errorVectors{
+		_, symptom := OperationO(err, genPolynomial)
+		errorMap[symptom] = err
 	}
 	return errorMap
 }
 
-func syndromeTableToString(syndromeTable map[uint64]uint64) map[string]string {
-	syndromeTableStr := make(map[string]string, len(syndromeTable))
-	for syndrome, err := range syndromeTable {
-		syndromeTableStr[fmt.Sprintf("%b", syndrome)] = fmt.Sprintf("%b", err)
+func getSymptomTablesByClasses(errorsByClasses [][]uint64, genPolynomial uint64) []map[uint64]uint64 {
+	symptomTables := make([]map[uint64]uint64, len(errorsByClasses))
+	for i, errorsClass := range errorsByClasses {
+		symptomTables[i] = getSymptomTableForErrorList(errorsClass, genPolynomial)
 	}
-	return syndromeTableStr
+	return symptomTables
 }
 
-func SyndromePage(w http.ResponseWriter, r *http.Request) {
-	syndromeView := syndromeTableToString(syndromeTable)
-
-	tmpl, _ := template.ParseFiles("./templates/syndromes.html")
-	tmpl.Execute(w, syndromeView)
+func getSymptomTablesByClassesString(symptomTablesByClasses []map[uint64]uint64) []map[string]string {
+	res := make([]map[string]string, len(symptomTablesByClasses))
+	for class, symptomTable := range symptomTablesByClasses {
+		res[class] = make(map[string]string, len(symptomTable))
+		for symptom, err := range symptomTable {
+			res[class][fmt.Sprintf("%b", symptom)] = fmt.Sprintf("%b", err)
+		}
+	}
+	return res
 }
 
-func getSyndromeArrayStr(n, genPolynomial uint64) map[string]string {
-	errorMap := make(map[string]string, powBinary(n))
+func SymptomPage(w http.ResponseWriter, r *http.Request) {
+	symptomView := getSymptomTablesByClassesString(symptomTablesByClasses)
+
+	tmpl, _ := template.ParseFiles("./templates/symptoms.html")
+	tmpl.Execute(w, symptomView)
+}
+
+func getSymptomArrayStr(n, genPolynomial uint64) map[string] string {
+	errorMap := make(map[string] string, powBinary(n))
 	for i := uint64(1); i < powBinary(n); i++ {
-		_, syndrome := OperationO(i, genPolynomial)
-		errorMap[fmt.Sprintf("%b", i)] = fmt.Sprintf("%b", syndrome)
+		_, symptom := OperationO(i, genPolynomial)
+		errorMap[fmt.Sprintf("%b", i)] = fmt.Sprintf("%b", symptom)
 	}
 	return errorMap
 }
 
-func SyndromeArrayPage(w http.ResponseWriter, r *http.Request) {
-	errorMap := getSyndromeArrayStr(n, genPolynomial)
+func SymptomArrayPage(w http.ResponseWriter, r *http.Request) {
+	errorMap := getSymptomArrayStr(n, genPolynomial)
 
-	tmpl, _ := template.ParseFiles("./templates/syndromesArray.html")
+	tmpl, _ := template.ParseFiles("./templates/symptomsArray.html")
 	tmpl.Execute(w, errorMap)
 }
 
@@ -197,45 +200,29 @@ func ResultsPage(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, result)
 }
 
+
 func main() {
-	if DEBUG {
-		fmt.Printf("syndromeTable: %v\n", syndromeTable)
-	}
 	for class, errorClass := range errorClasses {
+		symptomTable := symptomTablesByClasses[class]
 		var correctedCounter uint64
 		for _, errorVector := range errorClass {
 			transferredVector := ImposeError(codedInformationVector, errorVector)
-			if DEBUG && class == 1 {
-				fmt.Printf("\ntransferredVector: %b\n", transferredVector)
-			}
-			_, syndrome := OperationO(transferredVector, genPolynomial)
-			if DEBUG && class == 1 {
-				fmt.Printf("syndrome: %b\n", syndrome)
-			}
-			if syndrome == 0 {
+			_, symptom := OperationO(transferredVector, genPolynomial)
+			if symptom == 0 {
 				continue
 			}
-			correctedVector := ImposeError(transferredVector, syndromeTable[syndrome])
-			if DEBUG && class == 1 {
-				fmt.Printf("correctedVector: %b\n", correctedVector)
-			}
-			if correctedVector == codedInformationVector {
+			correctedVector := ImposeError(transferredVector, symptomTable[symptom])
+			decodedMessage := correctedVector >> (n - k)
+			if decodedMessage == informationVector {
 				correctedCounter++
-				if DEBUG && class == 1 {
-					fmt.Printf("error corrected successfully | counter: %d\n", correctedCounter)
-				} 
 			}
 		}
-		result[class] = ResultRow{
-			fmt.Sprintf("%.2f", float64(correctedCounter)*100/float64(len(errorClass))),
-			correctedCounter,
-			len(errorClass),
-		}
+		result[class] = fmt.Sprintf("%.2f", float64(correctedCounter) * 100 /  float64(len(errorClass)))
 	}
 
 	http.HandleFunc("/", ErrorPage)
-	http.HandleFunc("/syndromes/", SyndromePage)
-	http.HandleFunc("/syndromes/array", SyndromeArrayPage)
+	http.HandleFunc("/symptoms/", SymptomPage)
+	http.HandleFunc("/symptoms/array", SymptomArrayPage)
 	http.HandleFunc("/results/", ResultsPage)
 	http.ListenAndServe(":8080", nil)
 
